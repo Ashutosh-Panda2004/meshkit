@@ -5,12 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/kubernetes/kompose/client"
 	"github.com/meshery/meshkit/utils"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
+
+// convertMu serializes calls to Convert. Convert swaps the process-global
+// logrus ExitFunc for the duration of a call and restores it on return,
+// which is not safe to do from concurrent goroutines: a call that has
+// already restored the real ExitFunc lets a fatal log in another in-flight
+// conversion exit the process. Holding the mutex for the duration of the
+// conversion keeps the swap and its restore atomic with respect to other
+// conversions until the override can be removed altogether.
+var convertMu sync.Mutex
 
 // Pinned to an immutable ref: validation semantics must not drift with the
 // upstream master branch (its 2026-07-03 schema update made empty manifests
@@ -42,6 +52,8 @@ func IsManifestADockerCompose(manifest []byte, schemaURL string) (err error) {
 // converts a given docker-compose file into kubernetes manifests
 // expects a validated docker-compose file
 func Convert(dockerCompose DockerComposeFile) (result string, err error) {
+	convertMu.Lock()
+	defer convertMu.Unlock()
 
   exitFunc := logrus.StandardLogger().ExitFunc;
 	// revert back to original exit func for logrus
@@ -76,27 +88,30 @@ func Convert(dockerCompose DockerComposeFile) (result string, err error) {
 
 	// Construct path to .meshery directory
 	mesheryDir := filepath.Join(homeDir, ".meshery")
-	tempFilePath := filepath.Join(mesheryDir, "temp.data")
-	envFilePath := filepath.Join(mesheryDir, ".env")
 
-	// create a empty .env file to avoid fatal error from kompose while reading env file
-	_ = utils.CreateFile([]byte{}, ".env", mesheryDir)
-	resultFilePath := filepath.Join(mesheryDir, "result.yaml")
-
-	// create a empty .env file to avoid fatal error from kompose while reading env file
-	if err := utils.CreateFile([]byte(""), ".env", mesheryDir); err != nil {
+	// Give this conversion a working directory of its own. The input, env
+	// and result files used to sit at fixed paths directly in mesheryDir,
+	// so concurrent conversions overwrote, appended to and deleted each
+	// other's files.
+	workDir, err := os.MkdirTemp(mesheryDir, "kompose-")
+	if err != nil {
 		return "", ErrCvrtKompose(err)
 	}
-
-	if err := utils.CreateFile(dockerCompose, "temp.data", mesheryDir); err != nil {
-		return "", ErrCvrtKompose(err)
-	}
-
 	defer func() {
-		_ = os.Remove(envFilePath)
-		_ = os.Remove(tempFilePath)
-		_ = os.Remove(resultFilePath)
+		_ = os.RemoveAll(workDir)
 	}()
+
+	tempFilePath := filepath.Join(workDir, "temp.data")
+	resultFilePath := filepath.Join(workDir, "result.yaml")
+
+	// create a empty .env file to avoid fatal error from kompose while reading env file
+	if err := utils.CreateFile([]byte(""), ".env", workDir); err != nil {
+		return "", ErrCvrtKompose(err)
+	}
+
+	if err := utils.CreateFile(dockerCompose, "temp.data", workDir); err != nil {
+		return "", ErrCvrtKompose(err)
+	}
 
 	formatComposeFile(&dockerCompose)
 	err = versionCheck(dockerCompose)
