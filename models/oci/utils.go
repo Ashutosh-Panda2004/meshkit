@@ -63,6 +63,13 @@ func UnCompressOCIArtifact(source, destination string) error {
 		return ErrGettingLayer(err)
 	}
 
+	// A valid image can have no layers at all (an empty or config-only
+	// artifact passes validation above); reject it with an error instead
+	// of panicking on the first layer below.
+	if len(layers) == 0 {
+		return ErrGettingLayer(fmt.Errorf("image has no layers"))
+	}
+
 	blob, err := layers[0].Compressed()
 	if err != nil {
 		return ErrCompressingLayer(err)
