@@ -59,12 +59,7 @@ func createHelmChartContent(manifestContent, chartName, chartVersion string) (st
 	}
 
 	mesheryDir := filepath.Join(homeDir, ".meshery")
-	packageDir := filepath.Join(mesheryDir, "helm-packages")
 	tempDir := filepath.Join(mesheryDir, "tmp", "helm")
-
-	if err := os.MkdirAll(packageDir, 0755); err != nil {
-		return "", ErrCreateHelmChart(err, "creating package directory")
-	}
 
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return "", ErrCreateHelmChart(err, "creating temp directory")
@@ -73,6 +68,15 @@ func createHelmChartContent(manifestContent, chartName, chartVersion string) (st
 	buildID := uuid.Must(uuid.NewV4()).String()
 	buildDir := filepath.Join(tempDir, buildID)
 	chartSourcePath := filepath.Join(buildDir, chartName)
+
+	// Package into a directory private to this build. The packager names the
+	// output from the chart name and version only, so a shared destination
+	// makes concurrent conversions of same-name, same-version charts
+	// overwrite, read and delete each other's packaged chart.
+	packageDir := filepath.Join(buildDir, "package")
+	if err := os.MkdirAll(packageDir, 0755); err != nil {
+		return "", ErrCreateHelmChart(err, "creating package directory")
+	}
 
 	defer func() {
 		err := os.RemoveAll(buildDir)
