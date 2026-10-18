@@ -60,8 +60,8 @@ func (client *Client) ApplyManifest(contents []byte, recvOptions ApplyOptions) e
 
 		// Default to namespace from the UI. If no namespace is passed, use the namespace used in the manifest.
 		val, err := meta.NewAccessor().Namespace(object)
-		if err == nil && len(val) > 1 {
-			if len(options.Namespace) > 1 {
+		if err == nil && val != "" {
+			if options.Namespace != "" {
 				er := meta.NewAccessor().SetNamespace(object, options.Namespace)
 				if er != nil {
 					if recvOptions.IgnoreErrors {
